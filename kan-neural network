@@ -1,0 +1,245 @@
+import sys
+sys.path.insert(0, "/usr/local/lib/python3.5/dist-packages")
+import re #for string operations
+import pandas as pd #for dataframes
+from gensim.models import Word2Vec #Word2Vec
+import numpy as np
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import Normalizer
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from matplotlib import pyplot as plt
+
+from kodex_nlp import read_files, get_stemmer #user functions
+
+stemmer = "turkishstemmer" # turkishstemmer, snowball, zemberek
+
+bozma = read_files("yargıtay_kararları/bozma/", stemmer = stemmer)
+onama = read_files("yargıtay_kararları/onam-detay/", stemmer = stemmer)
+kismen = read_files("yargıtay_kararları/kısmen/", stemmer = stemmer)
+
+all_docs = bozma + onama + kismen
+
+
+Y = np.concatenate((
+    np.ones(len(bozma))*0,
+    np.ones(len(onama))*1,
+    np.ones(len(kismen))*2))
+    
+    
+    X_train, X_val, y_train, y_val = train_test_split(
+    all_docs, Y, test_size=0.3, random_state=108)
+
+n_train = len(y_train)
+n_val = len(y_val)
+
+
+cnt_vec = CountVectorizer()
+
+transformed_data = cnt_vec.fit_transform(X_train+X_val)
+TF = transformed_data.toarray()
+TF_train = TF[:n_train,:] # Term freq for train
+TF_val = TF[n_train:,:] # Term freq for validation
+
+
+def idf(word_freqs):
+    N = len(word_freqs)
+    n = np.sum(word_freqs > 1/5000)
+    return np.log10(N/(n+1))
+    
+    
+    
+    
+    IDF_train = np.apply_along_axis(idf, 0, TF_train)
+TF_IDF_train = np.multiply(TF_train, IDF_train)
+
+
+
+TF_IDF_val = np.zeros((TF_val.shape))
+
+
+
+def extract_tfidf_val(current_TF, TF = TF_IDF_train):
+    TF = np.row_stack((TF, current_TF)  ) 
+    IDF = np.apply_along_axis(idf, 0, TF)
+    return np.multiply(current_TF, IDF)
+    
+    
+    
+    TF_IDF_val = np.apply_along_axis(extract_tfidf_val, 1, TF_val)
+    
+    
+    
+TF_IDF_val.shape
+
+
+m = 75
+svd = TruncatedSVD(n_components=m, random_state=1)
+lsa = make_pipeline(svd, Normalizer(copy=False))
+X_train_lsa = lsa.fit_transform(TF_IDF_train)
+
+
+X_val_lsa = lsa.transform(TF_IDF_val)
+
+
+
+knn_lsa = KNeighborsClassifier(n_neighbors=5, algorithm='brute', metric='cosine', weights='distance')
+knn_lsa.fit(X_train_lsa, y_train)
+
+
+
+p = knn_lsa.predict(X_val_lsa)
+
+
+
+bozma = 0
+onama = 0
+kismen = 0
+
+for i in range(0,len(p)):
+    if p[i] == y_val[i]:
+        
+        if p[i] == 0:
+            bozma += 1
+        if p[i] == 1:
+            onama += 1
+        if p[i] == 2:
+            kismen += 1
+
+numRight = bozma+onama+kismen
+
+print("Bozma:(%d / %d) correct - %.2f%%" % (bozma, np.sum(y_val==0), float(bozma) / float(np.sum(y_val==0)) * 100.0))
+print("Onama:(%d / %d) correct - %.2f%%" % (onama, np.sum(y_val==1), float(onama) / float(np.sum(y_val==1)) * 100.0))
+print("Kısmen:(%d / %d) correct - %.2f%%" % (kismen, np.sum(y_val==2), float(kismen) / float(np.sum(y_val==2)) * 100.0))
+print("Overall:(%d / %d) correct - %.2f%%" % (numRight, len(y_val), float(numRight) / float(len(y_val)) * 100.0))
+
+
+colo = y_train.astype("str")
+colo[colo == '0.0'] = 'b'
+colo[colo == '1.0'] = 'g'
+colo[colo == '2.0'] = 'r'
+
+
+
+print("printing only first 2 of "+str(m)+" components")
+plt.scatter(X_train_lsa[:, 0], X_train_lsa[:, 1], c = colo, cmap=None)
+plt.show()
+print("blue = bozma\ngreen = onama\nred = kismen")
+
+
+
+from keras.models import Sequential
+
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.convolutional import Conv2D
+from keras.layers.pooling import MaxPooling2D
+from keras.layers.normalization import BatchNormalization
+
+from keras.utils import np_utils
+
+from keras.optimizers import adam
+
+from keras import backend as K
+from keras.preprocessing.image import ImageDataGenerator
+from keras.callbacks import EarlyStopping, History
+
+import keras
+
+
+
+m = 200
+svd = TruncatedSVD(n_components=m, random_state=1)
+lsa = make_pipeline(svd, Normalizer(copy=False))
+NN_X_train = lsa.fit_transform(TF_IDF_train)
+NN_X_val = lsa.transform(TF_IDF_val)
+
+
+
+
+num_classes = 3
+NN_y_train = np_utils.to_categorical(y_train, num_classes)
+NN_y_val = np_utils.to_categorical(y_val, num_classes)
+
+
+
+
+
+def model_X():
+    #modeling
+    model = Sequential()
+
+    model.add(Dense(128, input_shape = NN_X_train.shape[1:]))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+    
+    model.add(Dense(64))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+        
+    model.add(Dense(32))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+    
+    model.add(Dense(num_classes))
+    model.add(Activation('softmax'))
+
+    opt = keras.optimizers.adam()
+
+    model.compile(loss='categorical_crossentropy',
+                  optimizer=opt,
+                  metrics=['accuracy'])
+
+   
+    return(model)
+    
+    
+model=model_X()
+model.summary()
+
+
+y_train.shape
+
+
+
+
+temp = model.fit(NN_X_train, NN_y_train,
+                    batch_size=16,
+                    epochs=200,
+                    verbose=1,
+                    validation_data=(NN_X_val, NN_y_val))
+                    
+                    
+                    
+%matplotlib inline
+
+curr_loss=temp.history['loss']
+curr_val_loss=temp.history['val_loss']
+curr_acc=temp.history['acc']
+curr_val_acc=temp.history['val_acc']   
+
+plt.figure()
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.plot(curr_loss)
+plt.plot(curr_val_loss)
+plt.legend(['Training', 'Validation'])
+
+plt.figure()
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.plot(curr_acc)
+plt.plot(curr_val_acc)
+plt.legend(['Training', 'Validation'], loc='lower right')
+
+
+
+
+
+
+    
+    
